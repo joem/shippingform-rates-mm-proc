@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Rates CSV → JS</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 820px;
+      margin: 2rem auto;
+      padding: 0 1.25rem;
+      color: #222;
+    }
+    h1 { font-size: 1.25rem; margin-bottom: 1.5rem; }
+    label { display: block; font-weight: 600; margin-bottom: .4rem; }
+    input[type="file"] { display: block; margin-bottom: 1rem; }
+    .error {
+      color: #c00;
+      background: #fff0f0;
+      border: 1px solid #fcc;
+      padding: .5rem .75rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+    }
+    .meta {
+      font-size: .875rem;
+      color: #555;
+      margin-bottom: .5rem;
+    }
+    textarea {
+      width: 100%;
+      height: 420px;
+      font-family: 'Menlo', 'Consolas', monospace;
+      font-size: .8125rem;
+      line-height: 1.5;
+      padding: .6rem .75rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      resize: vertical;
+    }
+    .actions { margin-top: .6rem; display: flex; gap: .5rem; align-items: center; }
+    button {
+      padding: .4rem .9rem;
+      font-size: .875rem;
+      cursor: pointer;
+      border: 1px solid #999;
+      border-radius: 4px;
+      background: #f5f5f5;
+    }
+    button:hover { background: #e8e8e8; }
+    .copied { color: #080; font-size: .875rem; }
+  </style>
+</head>
+<body x-data="app()">
+  <h1>Rates CSV → JS</h1>
+
+  <div>
+    <label for="csv-file">Select rates CSV file:</label>
+    <input id="csv-file" type="file" accept=".csv" @change="handleFile($event)">
+  </div>
+
+  <div class="error" x-show="error" x-text="error"></div>
+
+  <template x-if="output">
+    <div>
+      <p class="meta" x-text="meta"></p>
+      <textarea readonly :value="output"></textarea>
+      <div class="actions">
+        <button @click="copy()">Copy to clipboard</button>
+        <span class="copied" x-show="copied">Copied!</span>
+      </div>
+    </div>
+  </template>
+
+  <script>
+    function app() {
+      return {
+        output: '',
+        meta: '',
+        error: '',
+        copied: false,
+
+        handleFile(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            try {
+              const result = processCSV(ev.target.result);
+              this.output = result.js;
+              this.meta = result.meta;
+              this.error = '';
+            } catch (err) {
+              this.error = 'Error: ' + err.message;
+              this.output = '';
+              this.meta = '';
+            }
+          };
+          reader.readAsText(file);
+        },
+
+        copy() {
+          navigator.clipboard.writeText(this.output).then(() => {
+            this.copied = true;
+            setTimeout(() => { this.copied = false; }, 2000);
+          });
+        },
+      };
+    }
+
+    function processCSV(text) {
+      const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+
+      // Row 0: name in col 0, effective date in col 5
+      const metaRow = parseCSVRow(lines[0] || '');
+      const name = metaRow[0]?.trim() || 'rates';
+      const effectiveDate = metaRow[5]?.trim() || '';
+
+      // Find the header row (first row containing "weight")
+      let dataStart = -1;
+      for (let i = 1; i < lines.length; i++) {
+        if (lines[i].toLowerCase().includes('weight')) {
+          dataStart = i + 1;
+          break;
+        }
+      }
+      if (dataStart === -1) throw new Error('Could not find a header row containing "Weight".');
+
+      // Parse data rows: [maxWeightLbs, rate]
+      const tiers = [];
+      for (let i = dataStart; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const parts = parseCSVRow(line);
+        const maxWeight = parseFloat(parts[0]);
+        const rate = parseFloat(parts[1]);
+        if (!isNaN(maxWeight) && !isNaN(rate)) {
+          tiers.push([maxWeight, rate]);
+        }
+      }
+      if (tiers.length === 0) throw new Error('No valid weight/rate rows found.');
+
+      const varName = toCamelCase(name) + 'Rates';
+      const fnName = 'get' + capitalize(toCamelCase(name)) + 'Rate';
+
+      const tiersStr = tiers.map(([w, r]) => `    [${w}, ${r}]`).join(',\n');
+
+      const js =
+`const ${varName} = {
+  name: ${JSON.stringify(name)},
+  effectiveDate: ${JSON.stringify(effectiveDate)},
+  // [maxWeightLbs, rate] — find first entry where weight <= maxWeightLbs
+  tiers: [
+${tiersStr}
+  ],
+};
+
+function ${fnName}(weightLbs) {
+  const tier = ${varName}.tiers.find(([max]) => weightLbs <= max);
+  return tier ? tier[1] : null;
+}`;
+
+      const meta = `${name}${effectiveDate ? ' — effective ' + effectiveDate : ''} — ${tiers.length} weight tiers`;
+      return { js, meta };
+    }
+
+    // Minimal RFC-4180-compatible CSV row parser
+    function parseCSVRow(line) {
+      const result = [];
+      let field = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = !inQuotes;
+        } else if (ch === ',' && !inQuotes) {
+          result.push(field);
+          field = '';
+        } else {
+          field += ch;
+        }
+      }
+      result.push(field);
+      return result;
+    }
+
+    function toCamelCase(str) {
+      const camel = str.trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+([a-z0-9])/g, (_, ch) => ch.toUpperCase());
+      return /^[0-9]/.test(camel) ? '_' + camel : camel;
+    }
+
+    function capitalize(str) {
+      return str.charAt(0).toUpperCase() + str.slice(1);
+    }
+  </script>
+</body>
+</html>
