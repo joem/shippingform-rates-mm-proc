@@ -14,7 +14,13 @@
       padding: 0 1.25rem;
       color: #222;
     }
-    h1 { font-size: 1.25rem; margin-bottom: 1.5rem; }
+    h1 { font-size: 1.25rem; margin-bottom: .25rem; }
+    h2 {
+      font-size: 1rem;
+      margin: 2rem 0 .75rem;
+      padding-bottom: .35rem;
+      border-bottom: 1px solid #ddd;
+    }
     label { display: block; font-weight: 600; margin-bottom: .4rem; }
     input[type="file"] { display: block; margin-bottom: 1rem; }
     .error {
@@ -41,6 +47,7 @@
       border-radius: 4px;
       resize: vertical;
     }
+    textarea.zones { height: 300px; }
     .actions { margin-top: .6rem; display: flex; gap: .5rem; align-items: center; }
     button {
       padding: .4rem .9rem;
@@ -52,25 +59,46 @@
     }
     button:hover { background: #e8e8e8; }
     .copied { color: #080; font-size: .875rem; }
+    .hint { font-size: .8rem; color: #777; margin: -.5rem 0 .75rem; }
   </style>
 </head>
 <body x-data="app()">
   <h1>Rates CSV → JS</h1>
 
+  <!-- ── Rates section ── -->
+  <h2>Shipping Rates</h2>
+  <p class="hint">e.g. "Media Mail.csv" — weight tiers with a single rate per tier</p>
   <div>
-    <label for="csv-file">Select rates CSV file:</label>
-    <input id="csv-file" type="file" accept=".csv" @change="handleFile($event)">
+    <label for="rates-file">Select rates CSV file:</label>
+    <input id="rates-file" type="file" accept=".csv" @change="handleRatesFile($event)">
   </div>
-
-  <div class="error" x-show="error" x-text="error"></div>
-
-  <template x-if="output">
+  <div class="error" x-show="rates.error" x-text="rates.error"></div>
+  <template x-if="rates.output">
     <div>
-      <p class="meta" x-text="meta"></p>
-      <textarea readonly :value="output"></textarea>
+      <p class="meta" x-text="rates.meta"></p>
+      <textarea readonly :value="rates.output"></textarea>
       <div class="actions">
-        <button @click="copy()">Copy to clipboard</button>
-        <span class="copied" x-show="copied">Copied!</span>
+        <button @click="copy(rates)">Copy to clipboard</button>
+        <span class="copied" x-show="rates.copied">Copied!</span>
+      </div>
+    </div>
+  </template>
+
+  <!-- ── Zones section ── -->
+  <h2>USPS Zones</h2>
+  <p class="hint">e.g. "usps-zones.csv" — ZIP Code,Zone rows; single prefixes or ranges like 006---009</p>
+  <div>
+    <label for="zones-file">Select zones CSV file:</label>
+    <input id="zones-file" type="file" accept=".csv" @change="handleZonesFile($event)">
+  </div>
+  <div class="error" x-show="zones.error" x-text="zones.error"></div>
+  <template x-if="zones.output">
+    <div>
+      <p class="meta" x-text="zones.meta"></p>
+      <textarea class="zones" readonly :value="zones.output"></textarea>
+      <div class="actions">
+        <button @click="copy(zones)">Copy to clipboard</button>
+        <span class="copied" x-show="zones.copied">Copied!</span>
       </div>
     </div>
   </template>
@@ -78,48 +106,71 @@
   <script>
     function app() {
       return {
-        output: '',
-        meta: '',
-        error: '',
-        copied: false,
+        rates: { output: '', meta: '', error: '', copied: false },
+        zones: { output: '', meta: '', error: '', copied: false },
 
-        handleFile(e) {
+        handleRatesFile(e) {
           const file = e.target.files[0];
           if (!file) return;
-          const reader = new FileReader();
-          reader.onload = (ev) => {
+          readFile(file, (text) => {
             try {
-              const result = processCSV(ev.target.result);
-              this.output = result.js;
-              this.meta = result.meta;
-              this.error = '';
+              const result = processRatesCSV(text);
+              this.rates.output = result.js;
+              this.rates.meta = result.meta;
+              this.rates.error = '';
             } catch (err) {
-              this.error = 'Error: ' + err.message;
-              this.output = '';
-              this.meta = '';
+              this.rates.error = 'Error: ' + err.message;
+              this.rates.output = '';
+              this.rates.meta = '';
             }
-          };
-          reader.readAsText(file);
+          });
         },
 
-        copy() {
-          navigator.clipboard.writeText(this.output).then(() => {
-            this.copied = true;
-            setTimeout(() => { this.copied = false; }, 2000);
+        handleZonesFile(e) {
+          const file = e.target.files[0];
+          if (!file) return;
+          readFile(file, (text) => {
+            try {
+              const result = processZonesCSV(text);
+              this.zones.output = result.js;
+              this.zones.meta = result.meta;
+              this.zones.error = '';
+            } catch (err) {
+              this.zones.error = 'Error: ' + err.message;
+              this.zones.output = '';
+              this.zones.meta = '';
+            }
+          });
+        },
+
+        copy(section) {
+          navigator.clipboard.writeText(section.output).then(() => {
+            section.copied = true;
+            setTimeout(() => { section.copied = false; }, 2000);
           });
         },
       };
     }
 
-    function processCSV(text) {
-      const lines = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    function readFile(file, cb) {
+      const reader = new FileReader();
+      reader.onload = (ev) => cb(ev.target.result);
+      reader.readAsText(file);
+    }
 
-      // Row 0: name in col 0, effective date in col 5
+    // ── Rates CSV processor ──────────────────────────────────────────────────
+    // Expected format:
+    //   Row 0:  <name>,,,<status>,,<effective date>,,
+    //   Row 1:  (blank)
+    //   Row 2:  Weight Not Over (lbs),Single Piece
+    //   Row 3+: <maxWeightLbs>,<rate>
+    function processRatesCSV(text) {
+      const lines = normalizeLines(text);
+
       const metaRow = parseCSVRow(lines[0] || '');
       const name = metaRow[0]?.trim() || 'rates';
       const effectiveDate = metaRow[5]?.trim() || '';
 
-      // Find the header row (first row containing "weight")
       let dataStart = -1;
       for (let i = 1; i < lines.length; i++) {
         if (lines[i].toLowerCase().includes('weight')) {
@@ -129,7 +180,6 @@
       }
       if (dataStart === -1) throw new Error('Could not find a header row containing "Weight".');
 
-      // Parse data rows: [maxWeightLbs, rate]
       const tiers = [];
       for (let i = dataStart; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -137,15 +187,12 @@
         const parts = parseCSVRow(line);
         const maxWeight = parseFloat(parts[0]);
         const rate = parseFloat(parts[1]);
-        if (!isNaN(maxWeight) && !isNaN(rate)) {
-          tiers.push([maxWeight, rate]);
-        }
+        if (!isNaN(maxWeight) && !isNaN(rate)) tiers.push([maxWeight, rate]);
       }
       if (tiers.length === 0) throw new Error('No valid weight/rate rows found.');
 
       const varName = toCamelCase(name) + 'Rates';
       const fnName = 'get' + capitalize(toCamelCase(name)) + 'Rate';
-
       const tiersStr = tiers.map(([w, r]) => `    [${w}, ${r}]`).join(',\n');
 
       const js =
@@ -167,7 +214,88 @@ function ${fnName}(weightLbs) {
       return { js, meta };
     }
 
-    // Minimal RFC-4180-compatible CSV row parser
+    // ── Zones CSV processor ──────────────────────────────────────────────────
+    // Expected format (USPS zone chart export):
+    //   Row 0:  ZIP Code,Zone   ← header is row 0, no metadata before it
+    //   Row 1+: <zip-or-range>,<zone>
+    //
+    // ZIP column values are either a plain 3-digit prefix ("005") or a range
+    // using "---" as separator ("006---009"), or occasionally a longer value
+    // like "96700" where the first 3 digits are used as the prefix.
+    // Ranges are expanded into individual prefix entries.
+    function processZonesCSV(text) {
+      const lines = normalizeLines(text);
+
+      // Find the header row containing "zip" and "zone" (may be row 0)
+      let zipCol = -1, zoneCol = -1, dataStart = -1;
+      for (let i = 0; i < lines.length; i++) {
+        const row = parseCSVRow(lines[i]).map(c => c.trim().toLowerCase());
+        const zi = row.findIndex(c => c.includes('zip'));
+        const zo = row.findIndex(c => c === 'zone' || c.startsWith('zone'));
+        if (zi !== -1 && zo !== -1) {
+          zipCol = zi;
+          zoneCol = zo;
+          dataStart = i + 1;
+          break;
+        }
+      }
+      if (dataStart === -1) throw new Error('Could not find a header row with "ZIP" and "Zone" columns.');
+
+      // Build prefix → zone map, expanding ranges like "006---009"
+      const zones = {};
+      for (let i = dataStart; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        const row = parseCSVRow(line);
+        const zipRaw = row[zipCol]?.trim();
+        const zoneRaw = row[zoneCol]?.trim();
+        if (!zipRaw || !zoneRaw) continue;
+        const zone = parseInt(zoneRaw, 10);
+        if (isNaN(zone)) continue;
+
+        const rangeMatch = zipRaw.match(/^(\d+)-{2,}(\d+)$/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1], 10);
+          const end = parseInt(rangeMatch[2], 10);
+          for (let n = start; n <= end; n++) {
+            zones[String(n).padStart(3, '0')] = zone;
+          }
+        } else {
+          // Single value: use first 3 digits as prefix
+          zones[zipRaw.padStart(3, '0').slice(0, 3)] = zone;
+        }
+      }
+      if (Object.keys(zones).length === 0) throw new Error('No valid ZIP/zone rows found.');
+
+      const zonesStr = Object.entries(zones)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([prefix, zone]) => `    ${JSON.stringify(prefix)}: ${zone}`)
+        .join(',\n');
+
+      const js =
+`const uspsZones = {
+  // 3-digit dest ZIP prefix → USPS zone number
+  zones: {
+${zonesStr}
+  },
+};
+
+function getZone(destZip) {
+  const prefix = String(destZip).padStart(5, '0').slice(0, 3);
+  return uspsZones.zones[prefix] ?? null;
+}`;
+
+      const meta = `USPS zones — ${Object.keys(zones).length} destination prefixes`;
+      return { js, meta };
+    }
+
+    // ── Shared helpers ───────────────────────────────────────────────────────
+
+    function normalizeLines(text) {
+      return text.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    }
+
+    // Minimal RFC-4180-compatible single-row CSV parser
     function parseCSVRow(line) {
       const result = [];
       let field = '';
