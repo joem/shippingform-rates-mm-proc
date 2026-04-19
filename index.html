@@ -86,7 +86,7 @@
 
   <!-- ── Zones section ── -->
   <h2>USPS Zones</h2>
-  <p class="hint">e.g. "usps-zones.csv" — dest ZIP prefix → zone number, keyed by origin prefix</p>
+  <p class="hint">e.g. "usps-zones.csv" — ZIP Code,Zone rows; single prefixes or ranges like 006---009</p>
   <div>
     <label for="zones-file">Select zones CSV file:</label>
     <input id="zones-file" type="file" accept=".csv" @change="handleZonesFile($event)">
@@ -216,78 +216,76 @@ function ${fnName}(weightLbs) {
 
     // ── Zones CSV processor ──────────────────────────────────────────────────
     // Expected format (USPS zone chart export):
-    //   Row 0:  Local Zone Chart: <originPrefix>,,   (or similar phrasing)
-    //   Row 1:  (blank)
-    //   Row 2:  Dest ZIP Code Prefix,Zone,...
-    //   Row 3+: <3-digit prefix>,<zone number>,...
+    //   Row 0:  ZIP Code,Zone   ← header is row 0, no metadata before it
+    //   Row 1+: <zip-or-range>,<zone>
     //
-    // Generates an object keyed by 3-digit dest ZIP prefix → zone number.
-    // The lookup function accepts a full 5-digit ZIP and extracts the prefix.
+    // ZIP column values are either a plain 3-digit prefix ("005") or a range
+    // using "---" as separator ("006---009"), or occasionally a longer value
+    // like "96700" where the first 3 digits are used as the prefix.
+    // Ranges are expanded into individual prefix entries.
     function processZonesCSV(text) {
       const lines = normalizeLines(text);
 
-      // Extract origin prefix from row 0 (first 3-digit number found)
-      const metaStr = parseCSVRow(lines[0] || '')[0]?.trim() || '';
-      const originMatch = metaStr.match(/\b(\d{3})\b/);
-      const originPrefix = originMatch ? originMatch[1] : '';
-
-      // Find header row with both a "dest" column and a "zone" column
-      let destCol = -1, zoneCol = -1, dataStart = -1;
-      for (let i = 1; i < lines.length; i++) {
+      // Find the header row containing "zip" and "zone" (may be row 0)
+      let zipCol = -1, zoneCol = -1, dataStart = -1;
+      for (let i = 0; i < lines.length; i++) {
         const row = parseCSVRow(lines[i]).map(c => c.trim().toLowerCase());
-        const di = row.findIndex(c => c.includes('dest'));
-        const zi = row.findIndex(c => c === 'zone' || c.startsWith('zone'));
-        if (di !== -1 && zi !== -1) {
-          destCol = di;
-          zoneCol = zi;
+        const zi = row.findIndex(c => c.includes('zip'));
+        const zo = row.findIndex(c => c === 'zone' || c.startsWith('zone'));
+        if (zi !== -1 && zo !== -1) {
+          zipCol = zi;
+          zoneCol = zo;
           dataStart = i + 1;
           break;
         }
       }
-      if (dataStart === -1) throw new Error('Could not find a header row with "Dest" and "Zone" columns.');
+      if (dataStart === -1) throw new Error('Could not find a header row with "ZIP" and "Zone" columns.');
 
-      // Build dest-prefix → zone map; dest values may be 3-digit strings or full ZIPs
+      // Build prefix → zone map, expanding ranges like "006---009"
       const zones = {};
       for (let i = dataStart; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
         const row = parseCSVRow(line);
-        const destRaw = row[destCol]?.trim();
+        const zipRaw = row[zipCol]?.trim();
         const zoneRaw = row[zoneCol]?.trim();
-        if (!destRaw || !zoneRaw) continue;
-        // Accept 3-digit prefix directly or derive from 5-digit ZIP
-        const prefix = /^\d{3}$/.test(destRaw)
-          ? destRaw
-          : /^\d{5}/.test(destRaw) ? destRaw.slice(0, 3) : null;
+        if (!zipRaw || !zoneRaw) continue;
         const zone = parseInt(zoneRaw, 10);
-        if (prefix && !isNaN(zone)) zones[prefix] = zone;
+        if (isNaN(zone)) continue;
+
+        const rangeMatch = zipRaw.match(/^(\d+)-{2,}(\d+)$/);
+        if (rangeMatch) {
+          const start = parseInt(rangeMatch[1], 10);
+          const end = parseInt(rangeMatch[2], 10);
+          for (let n = start; n <= end; n++) {
+            zones[String(n).padStart(3, '0')] = zone;
+          }
+        } else {
+          // Single value: use first 3 digits as prefix
+          zones[zipRaw.padStart(3, '0').slice(0, 3)] = zone;
+        }
       }
-      if (Object.keys(zones).length === 0) throw new Error('No valid dest/zone rows found.');
+      if (Object.keys(zones).length === 0) throw new Error('No valid ZIP/zone rows found.');
 
-      const suffix = originPrefix || 'Unknown';
-      const varName = 'uspsZones' + suffix;
-
-      // Emit entries sorted numerically by prefix for readability
       const zonesStr = Object.entries(zones)
         .sort(([a], [b]) => a.localeCompare(b))
-        .map(([dest, zone]) => `    ${JSON.stringify(dest)}: ${zone}`)
+        .map(([prefix, zone]) => `    ${JSON.stringify(prefix)}: ${zone}`)
         .join(',\n');
 
       const js =
-`const ${varName} = {
-  originPrefix: ${JSON.stringify(originPrefix)},
+`const uspsZones = {
   // 3-digit dest ZIP prefix → USPS zone number
   zones: {
 ${zonesStr}
   },
 };
 
-function getZone${suffix}(destZip) {
+function getZone(destZip) {
   const prefix = String(destZip).padStart(5, '0').slice(0, 3);
-  return ${varName}.zones[prefix] ?? null;
+  return uspsZones.zones[prefix] ?? null;
 }`;
 
-      const meta = `Origin prefix: ${originPrefix || 'unknown'} — ${Object.keys(zones).length} destination zones`;
+      const meta = `USPS zones — ${Object.keys(zones).length} destination prefixes`;
       return { js, meta };
     }
 
