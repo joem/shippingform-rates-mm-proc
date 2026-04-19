@@ -21,8 +21,11 @@ Everything lives in `index.html`. Alpine.js (loaded from CDN) handles reactive U
 The app has two independent sections, each with its own file input and output textarea:
 
 **Rates section** — `processRatesCSV(text)`
-- Input: CSVs like `Media Mail.csv`. Row 0 holds the mail class name (col 0) and effective date (col 5). The first row containing "weight" is the header; everything after is `maxWeightLbs,rate` data.
-- Output: a `const <name>Rates` object with a `tiers` array of `[maxWeightLbs, rate]` pairs, plus a `get<Name>Rate(weightLbs)` function that finds the first tier where `weightLbs <= maxWeight`.
+
+Auto-detects single-zone vs multi-zone format by checking whether the row after the first `Weight Not Over` header contains `Zone N` cells.
+
+- *Single-zone* (e.g. `Media Mail.csv`): row 0 has name (col 0) and date (first cell matching `M/D/YYYY`); the `Weight Not Over` row is the header; data rows are `maxWeightLbs,rate`. Output: `const <name>Rates` with a `tiers` array of `[maxWeightLbs, rate]` pairs and a `get<Name>Rate(weightLbs)` lookup.
+- *Multi-zone* (e.g. `PM Retail.csv`, `USPS Ground Advantage Retail.csv`): same row-0 metadata; after the `Weight Not Over` header a zone-header row lists `Zone 1 … Zone N`; data rows are `maxWeight,z1rate,z2rate,…`. Multiple `Weight Not Over` sections are supported (Ground Advantage has an ounces section then a pounds section — ounce weights are converted to lbs by dividing by 16). Output: `const <name>Rates` with a `zones` array and `tiers` array of `[maxWeightLbs, zone1Rate, …]` pairs, and a `get<Name>Rate(weightLbs, zone)` lookup.
 
 **Zones section** — `processZonesCSV(text)`
 - Input: CSVs like `usps-zones.csv`. Row 0 is the header (`ZIP Code,Zone`). ZIP values are either plain 3-digit prefixes or ranges using `---` as separator (e.g. `006---009`); ranges are expanded into individual entries. Values longer than 3 digits (e.g. `96700`) are truncated to their first 3 digits.
@@ -38,4 +41,4 @@ The app has two independent sections, each with its own file input and output te
 `example-input/` contains representative CSVs:
 - `Media Mail.csv` — single-rate-per-weight format (what `processRatesCSV` targets)
 - `usps-zones.csv` — ZIP prefix → zone number (what `processZonesCSV` targets)
-- `PM Retail.csv`, `USPS Ground Advantage Retail.csv` — multi-zone rate tables (weight × zone grid); not yet handled by the parser
+- `PM Retail.csv`, `USPS Ground Advantage Retail.csv` — multi-zone rate tables (weight × zone grid); handled by the multi-zone path in `processRatesCSV`

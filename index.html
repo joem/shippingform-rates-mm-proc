@@ -67,7 +67,7 @@
 
   <!-- ── Rates section ── -->
   <h2>Shipping Rates</h2>
-  <p class="hint">e.g. "Media Mail.csv" — weight tiers with a single rate per tier</p>
+  <p class="hint">e.g. "Media Mail.csv" (single rate per weight) or "PM Retail.csv" / "USPS Ground Advantage Retail.csv" (rate per weight × zone)</p>
   <div>
     <label for="rates-file">Select rates CSV file:</label>
     <input id="rates-file" type="file" accept=".csv" @change="handleRatesFile($event)">
@@ -159,43 +159,57 @@
     }
 
     // ── Rates CSV processor ──────────────────────────────────────────────────
-    // Expected format:
-    //   Row 0:  <name>,,,<status>,,<effective date>,,
-    //   Row 1:  (blank)
-    //   Row 2:  Weight Not Over (lbs),Single Piece
-    //   Row 3+: <maxWeightLbs>,<rate>
+    // Handles two formats:
+    //
+    // Single-zone (e.g. "Media Mail.csv"):
+    //   Row 0:  <name>,...,<effective date>,...
+    //   Row N:  Weight Not Over (lbs),Single Piece   ← header
+    //   Row N+1+: <maxWeightLbs>,<rate>
+    //   Output: tiers array of [maxWeightLbs, rate]
+    //
+    // Multi-zone (e.g. "PM Retail.csv", "USPS Ground Advantage Retail.csv"):
+    //   Row 0:  <name>,...,<effective date>,...
+    //   Row N:  Weight Not Over (lbs|ounces),Zones,...   ← header; unit in parens
+    //   Row N+1: ,Zone 1,Zone 2,...,Zone 9              ← zone header
+    //   Row N+2+: <maxWeight>,<z1rate>,<z2rate>,...     ← data
+    //   Ounce weights are converted to lbs (oz / 16). Multiple Weight Not Over
+    //   sections are supported (Ground Advantage has ounces then pounds).
+    //   Output: tiers array of [maxWeightLbs, zone1Rate, ..., zoneNRate]
     function processRatesCSV(text) {
       const lines = normalizeLines(text);
 
+      // Row 0: name from col 0, date from first cell matching M/D/YYYY pattern
       const metaRow = parseCSVRow(lines[0] || '');
       const name = metaRow[0]?.trim() || 'rates';
-      const effectiveDate = metaRow[5]?.trim() || '';
+      const effectiveDate = metaRow.map(c => c.trim()).find(c => /^\d+\/\d+\/\d+$/.test(c)) || '';
 
-      let dataStart = -1;
+      // Find the first "Weight Not Over" row
+      let firstWeightIdx = -1;
       for (let i = 1; i < lines.length; i++) {
-        if (lines[i].toLowerCase().includes('weight')) {
-          dataStart = i + 1;
-          break;
-        }
+        if (/weight not over/i.test(lines[i])) { firstWeightIdx = i; break; }
       }
-      if (dataStart === -1) throw new Error('Could not find a header row containing "Weight".');
+      if (firstWeightIdx === -1) throw new Error('Could not find a "Weight Not Over" header row.');
 
-      const tiers = [];
-      for (let i = dataStart; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        const parts = parseCSVRow(line);
-        const maxWeight = parseFloat(parts[0]);
-        const rate = parseFloat(parts[1]);
-        if (!isNaN(maxWeight) && !isNaN(rate)) tiers.push([maxWeight, rate]);
-      }
-      if (tiers.length === 0) throw new Error('No valid weight/rate rows found.');
+      // Detect format: if the row after the weight header has "Zone N" cells → multi-zone
+      const afterWeightHeader = parseCSVRow(lines[firstWeightIdx + 1] || '');
+      const zoneColStart = afterWeightHeader.findIndex(c => /^zone\s*\d+$/i.test(c.trim()));
 
       const varName = toCamelCase(name) + 'Rates';
       const fnName = 'get' + capitalize(toCamelCase(name)) + 'Rate';
-      const tiersStr = tiers.map(([w, r]) => `    [${w}, ${r}]`).join(',\n');
 
-      const js =
+      // ── Single-zone ──────────────────────────────────────────────────────────
+      if (zoneColStart === -1) {
+        const tiers = [];
+        for (let i = firstWeightIdx + 1; i < lines.length; i++) {
+          const parts = parseCSVRow(lines[i].trim());
+          const maxWeight = parseFloat(parts[0]);
+          const rate = parseFloat(parts[1]);
+          if (!isNaN(maxWeight) && !isNaN(rate)) tiers.push([maxWeight, rate]);
+        }
+        if (tiers.length === 0) throw new Error('No valid weight/rate rows found.');
+
+        const tiersStr = tiers.map(([w, r]) => `    [${w}, ${r}]`).join(',\n');
+        const js =
 `const ${varName} = {
   name: ${JSON.stringify(name)},
   effectiveDate: ${JSON.stringify(effectiveDate)},
@@ -209,8 +223,76 @@ function ${fnName}(weightLbs) {
   const tier = ${varName}.tiers.find(([max]) => weightLbs <= max);
   return tier ? tier[1] : null;
 }`;
+        const meta = `${name}${effectiveDate ? ' — effective ' + effectiveDate : ''} — ${tiers.length} weight tiers`;
+        return { js, meta };
+      }
 
-      const meta = `${name}${effectiveDate ? ' — effective ' + effectiveDate : ''} — ${tiers.length} weight tiers`;
+      // ── Multi-zone ───────────────────────────────────────────────────────────
+      // Collect zone numbers from the first zone header row
+      const zones = afterWeightHeader
+        .map(c => c.trim())
+        .filter(c => /^zone\s*\d+$/i.test(c))
+        .map(c => parseInt(c.replace(/\D/g, ''), 10));
+
+      // Scan from the first Weight Not Over row; track current unit across sections
+      const tiers = [];
+      let currentUnit = 'lbs';
+      let i = firstWeightIdx;
+
+      while (i < lines.length) {
+        const line = lines[i];
+
+        if (/weight not over/i.test(line)) {
+          // Extract unit from e.g. "Weight Not Over (ounces)" or "Weight Not Over (Lbs)"
+          const unitMatch = line.match(/\(([^)]+)\)/i);
+          const unitStr = (unitMatch ? unitMatch[1] : '').toLowerCase();
+          currentUnit = (unitStr.includes('oz') || unitStr.includes('ounce')) ? 'oz' : 'lbs';
+
+          // Skip the zone header row if present after this weight header
+          const nextRow = parseCSVRow(lines[i + 1] || '');
+          const hasZoneHeader = nextRow.some(c => /^zone\s*\d+$/i.test(c.trim()));
+          i += hasZoneHeader ? 2 : 1;
+          continue;
+        }
+
+        const row = parseCSVRow(line);
+        const weightRaw = parseFloat(row[0]);
+        if (!isNaN(weightRaw)) {
+          const weightLbs = currentUnit === 'oz'
+            ? parseFloat((weightRaw / 16).toFixed(7))
+            : weightRaw;
+          const rates = zones.map((_, idx) => parseFloat(row[zoneColStart + idx]));
+          if (rates.every(r => !isNaN(r))) tiers.push([weightLbs, ...rates]);
+        }
+
+        i++;
+      }
+
+      if (tiers.length === 0) throw new Error('No valid weight/rate rows found.');
+
+      const zonesStr = `[${zones.join(', ')}]`;
+      const tiersStr = tiers.map(t => `    [${t.join(', ')}]`).join(',\n');
+      const lastZone = zones[zones.length - 1];
+
+      const js =
+`const ${varName} = {
+  name: ${JSON.stringify(name)},
+  effectiveDate: ${JSON.stringify(effectiveDate)},
+  zones: ${zonesStr},
+  // [maxWeightLbs, zone1Rate, ..., zone${lastZone}Rate]
+  tiers: [
+${tiersStr}
+  ],
+};
+
+function ${fnName}(weightLbs, zone) {
+  const tier = ${varName}.tiers.find(([max]) => weightLbs <= max);
+  if (!tier) return null;
+  const idx = ${varName}.zones.indexOf(zone);
+  return idx !== -1 ? tier[idx + 1] : null;
+}`;
+
+      const meta = `${name}${effectiveDate ? ' — effective ' + effectiveDate : ''} — ${tiers.length} weight tiers × ${zones.length} zones`;
       return { js, meta };
     }
 
