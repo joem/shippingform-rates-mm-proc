@@ -6,6 +6,7 @@
   <title>Rates CSV → JS</title>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
+    [x-cloak] { display: none !important; }
     *, *::before, *::after { box-sizing: border-box; }
     body {
       font-family: system-ui, sans-serif;
@@ -78,12 +79,52 @@
     button:hover { background: #e8e8e8; }
     .copied { color: #080; font-size: .875rem; }
     .hint { font-size: .8rem; color: #777; margin: -.5rem 0 .75rem; }
+    .modal-backdrop {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.45);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100;
+    }
+    .modal {
+      background: #fff;
+      border-radius: 6px;
+      padding: 1.5rem;
+      max-width: 480px;
+      width: 90%;
+      box-shadow: 0 8px 32px rgba(0,0,0,.2);
+    }
+    .modal h2 { margin: 0 0 .75rem; font-size: 1rem; }
+    .modal p { margin: 0; color: #555; font-size: .9rem; line-height: 1.6; }
+    .modal-close {
+      margin-top: 1.25rem;
+      display: block;
+      margin-left: auto;
+    }
+    .btn-help {
+      margin-left: auto;
+      border-radius: 50%;
+      width: 1.75rem;
+      height: 1.75rem;
+      padding: 0;
+      font-weight: 700;
+      line-height: 1;
+    }
   </style>
 </head>
 <body x-data="app()">
-  <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:1.25rem;">
+  <div style="display:flex; align-items:center; gap:1rem; margin-bottom:1.25rem;">
     <h1 style="margin:0;">Rates CSV → JS</h1>
     <button @click="reset()" x-show="rates.output || rates.error || zones.output || zones.error">Reset</button>
+    <button class="btn-help" @click="help = true">?</button>
+  </div>
+
+  <!-- ── Help modal ── -->
+  <div class="modal-backdrop" x-show="help" x-cloak @click.self="help = false" @keydown.escape.window="help = false">
+    <div class="modal" role="dialog" aria-modal="true">
+      <h2>Help</h2>
+      <p>Placeholder help text. Describe how to use this tool here.</p>
+      <button class="modal-close" @click="help = false">Close</button>
+    </div>
   </div>
 
   <div class="tabs">
@@ -135,6 +176,7 @@
     function app() {
       return {
         tab: 'rates',
+        help: false,
         rates: { output: '', meta: '', error: '', copied: false },
         zones: { output: '', meta: '', error: '', copied: false },
 
