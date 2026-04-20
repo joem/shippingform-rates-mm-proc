@@ -63,7 +63,10 @@
   </style>
 </head>
 <body x-data="app()">
-  <h1>Rates CSV → JS</h1>
+  <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:1.5rem;">
+    <h1 style="margin:0;">Rates CSV → JS</h1>
+    <button @click="reset()" x-show="rates.output || rates.error || zones.output || zones.error">Reset</button>
+  </div>
 
   <!-- ── Rates section ── -->
   <h2>Shipping Rates</h2>
@@ -141,6 +144,13 @@
               this.zones.meta = '';
             }
           });
+        },
+
+        reset() {
+          this.rates = { output: '', meta: '', error: '', copied: false };
+          this.zones = { output: '', meta: '', error: '', copied: false };
+          document.getElementById('rates-file').value = '';
+          document.getElementById('zones-file').value = '';
         },
 
         copy(section) {
