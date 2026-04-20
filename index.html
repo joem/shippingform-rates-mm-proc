@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Rates CSV → JS</title>
+  <title>Rates And Zones Generator For Shipping Form</title>
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
   <style>
     [x-cloak] { display: none !important; }
@@ -129,7 +129,7 @@
 
   <div class="tabs">
     <button class="tab" :class="{ active: tab === 'rates' }" @click="tab = 'rates'">Shipping Rates</button>
-    <button class="tab" :class="{ active: tab === 'zones' }" @click="tab = 'zones'">USPS Zones</button>
+    <button class="tab" :class="{ active: tab === 'zones' }" @click="tab = 'zones'">Shipping Zones</button>
   </div>
 
   <!-- ── Rates tab ── -->
