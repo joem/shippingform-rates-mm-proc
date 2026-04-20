@@ -15,11 +15,29 @@
       color: #222;
     }
     h1 { font-size: 1.25rem; margin-bottom: .25rem; }
-    h2 {
-      font-size: 1rem;
-      margin: 2rem 0 .75rem;
-      padding-bottom: .35rem;
-      border-bottom: 1px solid #ddd;
+    .tabs {
+      display: flex;
+      gap: 0;
+      border-bottom: 2px solid #ddd;
+      margin-bottom: 1.25rem;
+    }
+    .tab {
+      padding: .45rem 1.1rem;
+      font-size: .9rem;
+      cursor: pointer;
+      border: 1px solid transparent;
+      border-bottom: none;
+      border-radius: 4px 4px 0 0;
+      background: none;
+      color: #555;
+      margin-bottom: -2px;
+    }
+    .tab:hover { background: #f0f0f0; color: #222; }
+    .tab.active {
+      border-color: #ddd;
+      background: #fff;
+      color: #222;
+      font-weight: 600;
     }
     label { display: block; font-weight: 600; margin-bottom: .4rem; }
     input[type="file"] { display: block; margin-bottom: 1rem; }
@@ -63,52 +81,60 @@
   </style>
 </head>
 <body x-data="app()">
-  <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:1.5rem;">
+  <div style="display:flex; align-items:baseline; gap:1rem; margin-bottom:1.25rem;">
     <h1 style="margin:0;">Rates CSV → JS</h1>
     <button @click="reset()" x-show="rates.output || rates.error || zones.output || zones.error">Reset</button>
   </div>
 
-  <!-- ── Rates section ── -->
-  <h2>Shipping Rates</h2>
-  <p class="hint">e.g. "Media Mail.csv" (single rate per weight) or "PM Retail.csv" / "USPS Ground Advantage Retail.csv" (rate per weight × zone)</p>
-  <div>
-    <label for="rates-file">Select rates CSV file:</label>
-    <input id="rates-file" type="file" accept=".csv" @change="handleRatesFile($event)">
+  <div class="tabs">
+    <button class="tab" :class="{ active: tab === 'rates' }" @click="tab = 'rates'">Shipping Rates</button>
+    <button class="tab" :class="{ active: tab === 'zones' }" @click="tab = 'zones'">USPS Zones</button>
   </div>
-  <div class="error" x-show="rates.error" x-text="rates.error"></div>
-  <template x-if="rates.output">
-    <div>
-      <p class="meta" x-text="rates.meta"></p>
-      <textarea readonly :value="rates.output"></textarea>
-      <div class="actions">
-        <button @click="copy(rates)">Copy to clipboard</button>
-        <span class="copied" x-show="rates.copied">Copied!</span>
-      </div>
-    </div>
-  </template>
 
-  <!-- ── Zones section ── -->
-  <h2>USPS Zones</h2>
-  <p class="hint">e.g. "usps-zones.csv" — ZIP Code,Zone rows; single prefixes or ranges like 006---009</p>
-  <div>
-    <label for="zones-file">Select zones CSV file:</label>
-    <input id="zones-file" type="file" accept=".csv" @change="handleZonesFile($event)">
-  </div>
-  <div class="error" x-show="zones.error" x-text="zones.error"></div>
-  <template x-if="zones.output">
+  <!-- ── Rates tab ── -->
+  <div x-show="tab === 'rates'">
+    <p class="hint">e.g. "Media Mail.csv" (single rate per weight) or "PM Retail.csv" / "USPS Ground Advantage Retail.csv" (rate per weight × zone)</p>
     <div>
-      <p class="meta" x-text="zones.meta"></p>
-      <textarea class="zones" readonly :value="zones.output"></textarea>
-      <div class="actions">
-        <button @click="copy(zones)">Copy to clipboard</button>
-        <span class="copied" x-show="zones.copied">Copied!</span>
-      </div>
+      <label for="rates-file">Select rates CSV file:</label>
+      <input id="rates-file" type="file" accept=".csv" @change="handleRatesFile($event)">
     </div>
-  </template>
+    <div class="error" x-show="rates.error" x-text="rates.error"></div>
+    <template x-if="rates.output">
+      <div>
+        <p class="meta" x-text="rates.meta"></p>
+        <textarea readonly :value="rates.output"></textarea>
+        <div class="actions">
+          <button @click="copy(rates)">Copy to clipboard</button>
+          <span class="copied" x-show="rates.copied">Copied!</span>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <!-- ── Zones tab ── -->
+  <div x-show="tab === 'zones'">
+    <p class="hint">e.g. "usps-zones.csv" — ZIP Code,Zone rows; single prefixes or ranges like 006---009</p>
+    <div>
+      <label for="zones-file">Select zones CSV file:</label>
+      <input id="zones-file" type="file" accept=".csv" @change="handleZonesFile($event)">
+    </div>
+    <div class="error" x-show="zones.error" x-text="zones.error"></div>
+    <template x-if="zones.output">
+      <div>
+        <p class="meta" x-text="zones.meta"></p>
+        <textarea class="zones" readonly :value="zones.output"></textarea>
+        <div class="actions">
+          <button @click="copy(zones)">Copy to clipboard</button>
+          <span class="copied" x-show="zones.copied">Copied!</span>
+        </div>
+      </div>
+    </template>
+  </div>
 
   <script>
     function app() {
       return {
+        tab: 'rates',
         rates: { output: '', meta: '', error: '', copied: false },
         zones: { output: '', meta: '', error: '', copied: false },
 
@@ -147,6 +173,7 @@
         },
 
         reset() {
+          this.tab = 'rates';
           this.rates = { output: '', meta: '', error: '', copied: false };
           this.zones = { output: '', meta: '', error: '', copied: false };
           document.getElementById('rates-file').value = '';
